@@ -4,9 +4,6 @@ from datetime import datetime, timezone
 
 async def get_db_pool():
     db_url = os.getenv("DATABASE_URL")
-    if not db_url:
-        raise ValueError("DATABASE_URL environment variable is not set.")
-    # asyncpg handles Render's internal database URL natively
     return await asyncpg.create_pool(db_url)
 
 async def init_db(pool):
@@ -46,22 +43,26 @@ async def get_mod_role(pool, guild_id):
 
 async def start_shift(pool, user_id, guild_id):
     async with pool.acquire() as conn:
+        now = datetime.now(timezone.utc)
         await conn.execute('''
-            INSERT INTO active_shifts (user_id, guild_id) VALUES ($1, $2)
+            INSERT INTO active_shifts (user_id, guild_id, start_time, last_ping) 
+            VALUES ($1, $2, $3, $3)
             ON CONFLICT (user_id) DO NOTHING
-        ''', user_id, guild_id)
+        ''', user_id, guild_id, now)
 
 async def get_active_shift(pool, user_id):
     async with pool.acquire() as conn:
         return await conn.fetchrow('SELECT * FROM active_shifts WHERE user_id = $1', user_id)
 
-async def get_all_active_shifts(pool):
+async def get_all_active_shifts(pool, guild_id=None):
     async with pool.acquire() as conn:
+        if guild_id:
+            return await conn.fetch('SELECT * FROM active_shifts WHERE guild_id = $1', guild_id)
         return await conn.fetch('SELECT * FROM active_shifts')
 
 async def update_last_ping(pool, user_id):
     async with pool.acquire() as conn:
-        await conn.execute('UPDATE active_shifts SET last_ping = CURRENT_TIMESTAMP WHERE user_id = $1', user_id)
+        await conn.execute('UPDATE active_shifts SET last_ping = $1 WHERE user_id = $2', datetime.now(timezone.utc), user_id)
 
 async def end_shift(pool, user_id):
     async with pool.acquire() as conn:
@@ -70,8 +71,8 @@ async def end_shift(pool, user_id):
             duration = int((datetime.now(timezone.utc) - shift['start_time']).total_seconds() / 60)
             await conn.execute('''
                 INSERT INTO past_shifts (user_id, guild_id, start_time, end_time, duration_minutes)
-                VALUES ($1, $2, $3, CURRENT_TIMESTAMP, $4)
-            ''', user_id, shift['guild_id'], shift['start_time'], duration)
+                VALUES ($1, $2, $3, $4, $5)
+            ''', user_id, shift['guild_id'], shift['start_time'], datetime.now(timezone.utc), duration)
             await conn.execute('DELETE FROM active_shifts WHERE user_id = $1', user_id)
             return duration
         return None
@@ -80,3 +81,8 @@ async def get_stats(pool, user_id):
     async with pool.acquire() as conn:
         rows = await conn.fetch('SELECT duration_minutes FROM past_shifts WHERE user_id = $1', user_id)
         return sum(row['duration_minutes'] for row in rows)
+
+async def get_all_stats(pool, guild_id):
+    async with pool.acquire() as conn:
+        rows = await conn.fetch('SELECT user_id, SUM(duration_minutes) as total FROM past_shifts WHERE guild_id = $1 GROUP BY user_id ORDER BY total DESC', guild_id)
+        return rows
