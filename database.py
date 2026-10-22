@@ -12,10 +12,12 @@ async def init_db(pool):
             CREATE TABLE IF NOT EXISTS mod_roles (
                 guild_id BIGINT PRIMARY KEY,
                 role_id BIGINT,
-                ping_channel_id BIGINT
+                ping_channel_id BIGINT,
+                last_reset TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
             );
             
             ALTER TABLE mod_roles ADD COLUMN IF NOT EXISTS ping_channel_id BIGINT;
+            ALTER TABLE mod_roles ADD COLUMN IF NOT EXISTS last_reset TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP;
             
             CREATE TABLE IF NOT EXISTS active_shifts (
                 user_id BIGINT PRIMARY KEY,
@@ -23,6 +25,7 @@ async def init_db(pool):
                 start_time TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
                 last_ping TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
             );
+            
             CREATE TABLE IF NOT EXISTS past_shifts (
                 shift_id SERIAL PRIMARY KEY,
                 user_id BIGINT,
@@ -36,8 +39,8 @@ async def init_db(pool):
 async def set_guild_config(pool, guild_id, role_id, ping_channel_id):
     async with pool.acquire() as conn:
         await conn.execute('''
-            INSERT INTO mod_roles (guild_id, role_id, ping_channel_id) 
-            VALUES ($1, $2, $3)
+            INSERT INTO mod_roles (guild_id, role_id, ping_channel_id, last_reset) 
+            VALUES ($1, $2, $3, CURRENT_TIMESTAMP)
             ON CONFLICT (guild_id) DO UPDATE 
             SET role_id = $2, ping_channel_id = $3
         ''', guild_id, role_id, ping_channel_id)
@@ -96,12 +99,10 @@ async def get_weekly_stats(pool, user_id):
         return sum(row['duration_minutes'] for row in rows)
 
 async def get_all_stats(pool, guild_id):
-    # Enforces the 30-day automatic reset by only pulling the last 30 days of data
     async with pool.acquire() as conn:
         rows = await conn.fetch('''
             SELECT user_id, SUM(duration_minutes) as total 
-            FROM past_shifts 
-            WHERE guild_id = $1 AND start_time >= NOW() - INTERVAL '30 days'
+            FROM past_shifts WHERE guild_id = $1 
             GROUP BY user_id ORDER BY total DESC
         ''', guild_id)
         return rows
@@ -109,7 +110,19 @@ async def get_all_stats(pool, guild_id):
 async def reset_all_stats(pool, guild_id):
     async with pool.acquire() as conn:
         await conn.execute('DELETE FROM past_shifts WHERE guild_id = $1', guild_id)
+        await conn.execute('UPDATE mod_roles SET last_reset = CURRENT_TIMESTAMP WHERE guild_id = $1', guild_id)
 
 async def reset_user_stats(pool, user_id, guild_id):
     async with pool.acquire() as conn:
         await conn.execute('DELETE FROM past_shifts WHERE user_id = $1 AND guild_id = $2', user_id, guild_id)
+
+async def check_auto_reset(pool):
+    async with pool.acquire() as conn:
+        guilds = await conn.fetch("SELECT guild_id FROM mod_roles WHERE CURRENT_TIMESTAMP - last_reset >= INTERVAL '28 days'")
+        reset_guilds = []
+        for g in guilds:
+            guild_id = g['guild_id']
+            await conn.execute("DELETE FROM past_shifts WHERE guild_id = $1", guild_id)
+            await conn.execute("UPDATE mod_roles SET last_reset = CURRENT_TIMESTAMP WHERE guild_id = $1", guild_id)
+            reset_guilds.append(guild_id)
+        return reset_guilds
