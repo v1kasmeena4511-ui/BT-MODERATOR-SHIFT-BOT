@@ -92,10 +92,10 @@ async def weekly(ctx, member: discord.Member = None):
 async def allstats(ctx):
     rows = await database.get_all_stats(db_pool, ctx.guild.id)
     if not rows:
-        await ctx.send("🇬🇧 No stats yet. / 🇷🇺 Статистики пока нет.")
+        await ctx.send("🇬🇧 No stats yet in the last 30 days. / 🇷🇺 За последние 30 дней статистики нет.")
         return
     
-    leaderboard = "🏆 **Leaderboard / Таблица лидеров**\n"
+    leaderboard = "🏆 **30-Day Leaderboard / Таблица лидеров (30 дней)**\n"
     for idx, row in enumerate(rows[:15]):
         user = bot.get_user(row['user_id'])
         name = user.display_name if user else f"User {row['user_id']}"
@@ -126,6 +126,50 @@ async def allshifts_error(ctx, error):
     if isinstance(error, commands.MissingPermissions):
         await ctx.send("🚫 Admins only. / Только для администраторов.")
 
+@bot.command()
+@commands.has_permissions(administrator=True)
+async def resetstats(ctx, member: discord.Member):
+    await database.reset_user_stats(db_pool, member.id, ctx.guild.id)
+    await ctx.send(f"🇬🇧 Stats for {member.mention} have been reset.\n🇷🇺 Статистика {member.mention} была сброшена.")
+
+@resetstats.error
+async def resetstats_error(ctx, error):
+    if isinstance(error, commands.MissingPermissions):
+        await ctx.send("🚫 Admins only. / Только для администраторов.")
+    elif isinstance(error, commands.MissingRequiredArgument):
+        await ctx.send("🇬🇧 Please tag a user: `!resetstats @user`\n🇷🇺 Пожалуйста, укажите пользователя: `!resetstats @user`")
+
+@bot.command()
+@commands.has_permissions(administrator=True)
+async def resetallstats(ctx):
+    await database.reset_all_stats(db_pool, ctx.guild.id)
+    await ctx.send("🇬🇧 All server stats have been completely wiped.\n🇷🇺 Вся статистика сервера была полностью удалена.")
+
+@resetallstats.error
+async def resetallstats_error(ctx, error):
+    if isinstance(error, commands.MissingPermissions):
+        await ctx.send("🚫 Admins only. / Только для администраторов.")
+
+@bot.command()
+async def info(ctx):
+    info_text = (
+        "🤖 **Moderator Shift Bot v1.1**\n"
+        "🇬🇧 Tracks shifts, verifies activity, and logs statistics.\n"
+        "🇷🇺 Отслеживает смены, проверяет активность и ведет статистику.\n\n"
+        "**Moderator Commands / Команды модераторов:**\n"
+        "`!shift` - Start a shift / Начать смену\n"
+        "`!endshift` - End shift / Закончить смену\n"
+        "`!stats` - All-time personal stats / Личная статистика (за все время)\n"
+        "`!weekly [@user]` - 7-day stats / Статистика за 7 дней\n\n"
+        "**Admin Commands / Команды администраторов:**\n"
+        "`/add-mod-role` - Setup roles and ping channel / Настройка ролей и канала\n"
+        "`!allstats` - 30-Day Leaderboard / Таблица лидеров (за 30 дней)\n"
+        "`!allshifts` - Current active shifts / Текущие активные смены\n"
+        "`!resetstats @user` - Wipe specific user stats / Сброс статистики пользователя\n"
+        "`!resetallstats` - Wipe all server stats / Полный сброс статистики сервера"
+    )
+    await ctx.send(info_text)
+
 class ConfirmView(discord.ui.View):
     def __init__(self, user_id):
         super().__init__(timeout=60.0)
@@ -141,8 +185,16 @@ class ConfirmView(discord.ui.View):
     @discord.ui.button(label="Confirm / Подтвердить", style=discord.ButtonStyle.green)
     async def confirm_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         self.confirmed = True
+        
+        # Calculate current shift duration for the ephemeral message
+        shift = await database.get_active_shift(db_pool, self.user_id)
+        time_str = ""
+        if shift:
+            duration = int((datetime.now(timezone.utc) - shift['start_time']).total_seconds() / 60)
+            time_str = f" | {duration} min/мин"
+            
         await database.update_last_ping(db_pool, self.user_id)
-        await interaction.response.send_message("🇬🇧 Confirmed! / 🇷🇺 Подтверждено!", ephemeral=True)
+        await interaction.response.send_message(f"🇬🇧 Confirmed!{time_str} / 🇷🇺 Подтверждено!{time_str}", ephemeral=True)
         self.stop()
 
 @tasks.loop(minutes=1.0)
@@ -184,7 +236,6 @@ async def shift_monitor():
                                 await database.end_shift(db_pool, u_id)
                                 fail_msg = f"<@{u_id}>\n🇬🇧 Failed to confirm. Shift ended.\n🇷🇺 Не подтвердил. Смена закрыта."
                                 
-                                # Always post failure in a server channel
                                 fallback_chan = bot.get_channel(ping_channel_id) if ping_channel_id else shift_channels.get(u_id)
                                 if fallback_chan:
                                     await fallback_chan.send(fail_msg)
