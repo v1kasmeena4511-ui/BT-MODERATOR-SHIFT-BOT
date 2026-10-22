@@ -11,8 +11,13 @@ async def init_db(pool):
         await conn.execute('''
             CREATE TABLE IF NOT EXISTS mod_roles (
                 guild_id BIGINT PRIMARY KEY,
-                role_id BIGINT
+                role_id BIGINT,
+                ping_channel_id BIGINT
             );
+            
+            -- Safely upgrade existing tables if they were already created
+            ALTER TABLE mod_roles ADD COLUMN IF NOT EXISTS ping_channel_id BIGINT;
+            
             CREATE TABLE IF NOT EXISTS active_shifts (
                 user_id BIGINT PRIMARY KEY,
                 guild_id BIGINT,
@@ -29,17 +34,18 @@ async def init_db(pool):
             );
         ''')
 
-async def set_mod_role(pool, guild_id, role_id):
+async def set_guild_config(pool, guild_id, role_id, ping_channel_id):
     async with pool.acquire() as conn:
         await conn.execute('''
-            INSERT INTO mod_roles (guild_id, role_id) 
-            VALUES ($1, $2)
-            ON CONFLICT (guild_id) DO UPDATE SET role_id = $2
-        ''', guild_id, role_id)
+            INSERT INTO mod_roles (guild_id, role_id, ping_channel_id) 
+            VALUES ($1, $2, $3)
+            ON CONFLICT (guild_id) DO UPDATE 
+            SET role_id = $2, ping_channel_id = $3
+        ''', guild_id, role_id, ping_channel_id)
 
-async def get_mod_role(pool, guild_id):
+async def get_guild_config(pool, guild_id):
     async with pool.acquire() as conn:
-        return await conn.fetchval('SELECT role_id FROM mod_roles WHERE guild_id = $1', guild_id)
+        return await conn.fetchrow('SELECT role_id, ping_channel_id FROM mod_roles WHERE guild_id = $1', guild_id)
 
 async def start_shift(pool, user_id, guild_id):
     async with pool.acquire() as conn:
@@ -82,7 +88,19 @@ async def get_stats(pool, user_id):
         rows = await conn.fetch('SELECT duration_minutes FROM past_shifts WHERE user_id = $1', user_id)
         return sum(row['duration_minutes'] for row in rows)
 
+async def get_weekly_stats(pool, user_id):
+    async with pool.acquire() as conn:
+        rows = await conn.fetch('''
+            SELECT duration_minutes FROM past_shifts 
+            WHERE user_id = $1 AND start_time >= NOW() - INTERVAL '7 days'
+        ''', user_id)
+        return sum(row['duration_minutes'] for row in rows)
+
 async def get_all_stats(pool, guild_id):
     async with pool.acquire() as conn:
-        rows = await conn.fetch('SELECT user_id, SUM(duration_minutes) as total FROM past_shifts WHERE guild_id = $1 GROUP BY user_id ORDER BY total DESC', guild_id)
+        rows = await conn.fetch('''
+            SELECT user_id, SUM(duration_minutes) as total 
+            FROM past_shifts WHERE guild_id = $1 
+            GROUP BY user_id ORDER BY total DESC
+        ''', guild_id)
         return rows
