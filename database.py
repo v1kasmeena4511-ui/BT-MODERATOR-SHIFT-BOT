@@ -15,7 +15,6 @@ async def init_db(pool):
                 ping_channel_id BIGINT
             );
             
-            -- Safely upgrade existing tables if they were already created
             ALTER TABLE mod_roles ADD COLUMN IF NOT EXISTS ping_channel_id BIGINT;
             
             CREATE TABLE IF NOT EXISTS active_shifts (
@@ -97,10 +96,20 @@ async def get_weekly_stats(pool, user_id):
         return sum(row['duration_minutes'] for row in rows)
 
 async def get_all_stats(pool, guild_id):
+    # Enforces the 30-day automatic reset by only pulling the last 30 days of data
     async with pool.acquire() as conn:
         rows = await conn.fetch('''
             SELECT user_id, SUM(duration_minutes) as total 
-            FROM past_shifts WHERE guild_id = $1 
+            FROM past_shifts 
+            WHERE guild_id = $1 AND start_time >= NOW() - INTERVAL '30 days'
             GROUP BY user_id ORDER BY total DESC
         ''', guild_id)
         return rows
+
+async def reset_all_stats(pool, guild_id):
+    async with pool.acquire() as conn:
+        await conn.execute('DELETE FROM past_shifts WHERE guild_id = $1', guild_id)
+
+async def reset_user_stats(pool, user_id, guild_id):
+    async with pool.acquire() as conn:
+        await conn.execute('DELETE FROM past_shifts WHERE user_id = $1 AND guild_id = $2', user_id, guild_id)
