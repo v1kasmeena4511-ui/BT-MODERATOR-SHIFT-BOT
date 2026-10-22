@@ -5,6 +5,7 @@ import random
 import asyncio
 from datetime import datetime, timezone
 import database
+import keep_alive # New import
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -72,7 +73,7 @@ async def stats(ctx):
 
 class ConfirmView(discord.ui.View):
     def __init__(self, user_id):
-        super().__init__(timeout=60.0) # 1 minute timeout
+        super().__init__(timeout=60.0)
         self.user_id = user_id
         self.confirmed = False
 
@@ -94,7 +95,6 @@ async def shift_monitor():
         
         minutes_since_ping = (now - last_ping).total_seconds() / 60
         
-        # Ping occurs randomly between 7 and 12 minutes
         if minutes_since_ping >= 12 or (minutes_since_ping >= 7 and random.random() < 0.3):
             if user_id not in pending_confirmations:
                 user = bot.get_user(user_id)
@@ -104,7 +104,7 @@ async def shift_monitor():
                         msg = await user.send("Are you still active on your shift? You have 1 minute to confirm.", view=view)
                         
                         async def wait_for_confirmation(u_id, v, m):
-                            await asyncio.sleep(60) # 1 minute wait
+                            await asyncio.sleep(60)
                             if not v.confirmed:
                                 await database.end_shift(db_pool, u_id)
                                 await m.channel.send("You failed to confirm in time. Your shift has been automatically ended.")
@@ -118,4 +118,6 @@ async def shift_monitor():
                         await database.end_shift(db_pool, user_id)
 
 if __name__ == "__main__":
+    # Start the background web server before starting the bot
+    keep_alive.keep_alive() 
     bot.run(os.getenv("DISCORD_TOKEN"))
