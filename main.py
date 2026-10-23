@@ -16,150 +16,98 @@ db_pool = None
 pending_confirmations = {}
 shift_channels = {}
 
-@bot.event
-async def on_ready():
-    global db_pool
-    try:
-        print("Attempting to connect to Supabase...")
-        db_pool = await database.get_db_pool()
-        await database.init_db(db_pool)
-        print("✅ Database connected successfully!")
-    except Exception as e:
-        print(f"❌ CRITICAL DATABASE ERROR: {e}")
+# --- PANEL VIEW ---
+class PanelView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None) # Timeout=None makes the buttons permanent after bot restarts
+
+    async def check_mod(self, interaction: discord.Interaction):
+        config = await database.get_guild_config(db_pool, interaction.guild.id)
+        if not config or not config['role_id']:
+            await interaction.response.send_message("🇬🇧 Mod role not setup. Admins must run `/add-mod-role`.\n🇷🇺 Роль модератора не настроена.", ephemeral=True)
+            return False
+        role = interaction.guild.get_role(config['role_id'])
+        if not role or role not in interaction.user.roles:
+            await interaction.response.send_message("🇬🇧 You don't have the mod role. / 🇷🇺 У вас нет роли модератора.", ephemeral=True)
+            return False
+        return True
+
+    @discord.ui.button(label="Start Shift / Начать", style=discord.ButtonStyle.green, custom_id="panel_start")
+    async def btn_start(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not await self.check_mod(interaction): return
+        if await database.get_active_shift(db_pool, interaction.user.id):
+            await interaction.response.send_message("🇬🇧 You're already on shift! / 🇷🇺 Вы уже на смене!", ephemeral=True)
+            return
         
-    shift_monitor.start()
-    try:
-        await bot.tree.sync()
-        print(f"Logged in as {bot.user} with all commands loaded.")
-    except Exception as e:
-        print(f"Sync error: {e}")
-
-@bot.tree.command(name="add-mod-role", description="Set the mod role and optional ping channel. / Установить роль и канал.")
-@discord.app_commands.default_permissions(administrator=True)
-async def add_mod_role(interaction: discord.Interaction, role: discord.Role, ping_channel: discord.TextChannel = None):
-    channel_id = ping_channel.id if ping_channel else None
-    await database.set_guild_config(db_pool, interaction.guild.id, role.id, channel_id)
-    
-    if channel_id:
-        msg = f"🇬🇧 Mod role set to {role.name}. Pings will go to {ping_channel.mention}. The 28-day season starts NOW.\n🇷🇺 Роль: {role.name}. Уведомления в {ping_channel.mention}. 28-дневный сезон начался."
-    else:
-        msg = f"🇬🇧 Mod role set to {role.name}. Pings will be sent via DM. The 28-day season starts NOW.\n🇷🇺 Роль: {role.name}. Уведомления в ЛС. 28-дневный сезон начался."
+        await database.start_shift(db_pool, interaction.user.id, interaction.guild.id)
+        shift_channels[interaction.user.id] = interaction.channel 
         
-    await interaction.response.send_message(msg, ephemeral=True)
+        # Ephemeral confirmation, public announcement
+        await interaction.response.send_message("🇬🇧 Shift started successfully. / 🇷🇺 Смена успешно начата.", ephemeral=True)
+        await interaction.channel.send(f"{interaction.user.mention}\n🇬🇧 Shift started.\n🇷🇺 Смена началась.")
 
-async def is_mod(ctx):
-    config = await database.get_guild_config(db_pool, ctx.guild.id)
-    if not config or not config['role_id'] or not ctx.guild.get_role(config['role_id']) in ctx.author.roles:
-        await ctx.send("🇬🇧 You don't have the mod role. / 🇷🇺 У вас нет роли модератора.")
-        return False
-    return True
+    @discord.ui.button(label="End Shift / Закончить", style=discord.ButtonStyle.red, custom_id="panel_end")
+    async def btn_end(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not await self.check_mod(interaction): return
+        duration = await database.end_shift(db_pool, interaction.user.id)
+        
+        if duration is not None:
+            if interaction.user.id in pending_confirmations:
+                pending_confirmations[interaction.user.id].cancel()
+                del pending_confirmations[interaction.user.id]
+            await interaction.response.send_message(f"🇬🇧 Shift ended. Duration: **{duration} min**.\n🇷🇺 Смена окончена. Время: **{duration} мин**.", ephemeral=True)
+        else:
+            await interaction.response.send_message("🇬🇧 No active shift. / 🇷🇺 Нет активной смены.", ephemeral=True)
 
-@bot.command()
-async def shift(ctx):
-    if not await is_mod(ctx): return
-    if await database.get_active_shift(db_pool, ctx.author.id):
-        await ctx.send("🇬🇧 You're already on shift! / 🇷🇺 Вы уже на смене!")
-        return
-    
-    await database.start_shift(db_pool, ctx.author.id, ctx.guild.id)
-    shift_channels[ctx.author.id] = ctx.channel 
-    
-    msg = f"{ctx.author.mention}\n🇬🇧 Shift started.\n🇷🇺 Смена началась."
-    await ctx.send(msg)
+    @discord.ui.button(label="My Stats / Моя стата", style=discord.ButtonStyle.blurple, custom_id="panel_stats")
+    async def btn_stats(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not await self.check_mod(interaction): return
+        total = await database.get_stats(db_pool, interaction.user.id)
+        await interaction.response.send_message(f"🇬🇧 You have completed **{total}** minutes this season.\n🇷🇺 В этом сезоне отработано **{total}** минут.", ephemeral=True)
 
-@bot.command()
-async def endshift(ctx):
-    duration = await database.end_shift(db_pool, ctx.author.id)
-    if duration is not None:
-        if ctx.author.id in pending_confirmations:
-            pending_confirmations[ctx.author.id].cancel()
-            del pending_confirmations[ctx.author.id]
-        msg = f"{ctx.author.mention}\n🇬🇧 Shift ended. Duration: **{duration} min**.\n🇷🇺 Смена окончена. Время: **{duration} мин**."
-        await ctx.send(msg)
-    else:
-        await ctx.send("🇬🇧 No active shift. / 🇷🇺 Нет активной смены.")
+    @discord.ui.button(label="Weekly / Неделя", style=discord.ButtonStyle.blurple, custom_id="panel_weekly")
+    async def btn_weekly(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not await self.check_mod(interaction): return
+        total = await database.get_weekly_stats(db_pool, interaction.user.id)
+        await interaction.response.send_message(f"🇬🇧 Weekly stats: **{total}** minutes.\n🇷🇺 За неделю: **{total}** минут.", ephemeral=True)
 
-@bot.command()
-async def stats(ctx):
-    total = await database.get_stats(db_pool, ctx.author.id)
-    msg = f"{ctx.author.mention}\n🇬🇧 You have completed **{total}** minutes this season.\n🇷🇺 В этом сезоне отработано **{total}** минут."
-    await ctx.send(msg)
+    @discord.ui.button(label="Active Shifts (Admin)", style=discord.ButtonStyle.gray, custom_id="panel_active")
+    async def btn_active(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message("🇬🇧 Admins only! / 🇷🇺 Только для админов!", ephemeral=True)
+            return
+        
+        shifts = await database.get_all_active_shifts(db_pool, interaction.guild.id)
+        if not shifts:
+            await interaction.response.send_message("🇬🇧 No active shifts. / 🇷🇺 Нет активных смен.", ephemeral=True)
+            return
+        
+        active_list = "🟢 **Active Shifts / Активные смены**\n"
+        for s in shifts:
+            duration = int((datetime.now(timezone.utc) - s['start_time']).total_seconds() / 60)
+            active_list += f"<@{s['user_id']}> — {duration} min/мин\n"
+        await interaction.response.send_message(active_list, ephemeral=True)
 
-@bot.command()
-async def weekly(ctx, member: discord.Member = None):
-    target = member or ctx.author
-    total = await database.get_weekly_stats(db_pool, target.id)
-    msg = f"{target.mention}\n🇬🇧 Weekly stats: **{total}** minutes.\n🇷🇺 За неделю: **{total}** минут."
-    await ctx.send(msg)
+    @discord.ui.button(label="Leaderboard (Admin)", style=discord.ButtonStyle.gray, custom_id="panel_leaderboard")
+    async def btn_leaderboard(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message("🇬🇧 Admins only! / 🇷🇺 Только для админов!", ephemeral=True)
+            return
+        
+        rows = await database.get_all_stats(db_pool, interaction.guild.id)
+        if not rows:
+            await interaction.response.send_message("🇬🇧 No stats yet this season. / 🇷🇺 В этом сезоне статистики пока нет.", ephemeral=True)
+            return
+        
+        leaderboard = "🏆 **Season Leaderboard / Таблица лидеров сезона**\n"
+        for idx, row in enumerate(rows[:15]):
+            user = bot.get_user(row['user_id'])
+            name = user.display_name if user else f"User {row['user_id']}"
+            leaderboard += f"**{idx+1}.** {name} — {row['total']} min/мин\n"
+        await interaction.response.send_message(leaderboard, ephemeral=True)
 
-@bot.command()
-@commands.has_permissions(administrator=True)
-async def allstats(ctx):
-    rows = await database.get_all_stats(db_pool, ctx.guild.id)
-    if not rows:
-        await ctx.send("🇬🇧 No stats yet this season. / 🇷🇺 В этом сезоне статистики пока нет.")
-        return
-    
-    leaderboard = "🏆 **Season Leaderboard / Таблица лидеров сезона**\n"
-    for idx, row in enumerate(rows[:15]):
-        user = bot.get_user(row['user_id'])
-        name = user.display_name if user else f"User {row['user_id']}"
-        leaderboard += f"**{idx+1}.** {name} — {row['total']} min/мин\n"
-    await ctx.send(leaderboard)
 
-@bot.command()
-@commands.has_permissions(administrator=True)
-async def allshifts(ctx):
-    shifts = await database.get_all_active_shifts(db_pool, ctx.guild.id)
-    if not shifts:
-        await ctx.send("🇬🇧 No active shifts. / 🇷🇺 Нет активных смен.")
-        return
-    
-    active_list = "🟢 **Active Shifts / Активные смены**\n"
-    for s in shifts:
-        duration = int((datetime.now(timezone.utc) - s['start_time']).total_seconds() / 60)
-        active_list += f"<@{s['user_id']}> — {duration} min/мин\n"
-    await ctx.send(active_list)
-
-@bot.command()
-@commands.has_permissions(administrator=True)
-async def resetstats(ctx, member: discord.Member):
-    await database.reset_user_stats(db_pool, member.id, ctx.guild.id)
-    await ctx.send(f"🇬🇧 Stats for {member.mention} have been reset.\n🇷🇺 Статистика {member.mention} была сброшена.")
-
-@bot.command()
-@commands.has_permissions(administrator=True)
-async def resetallstats(ctx):
-    await database.reset_all_stats(db_pool, ctx.guild.id)
-    await ctx.send("🇬🇧 All server stats have been completely wiped. A new season starts now.\n🇷🇺 Вся статистика сервера удалена. Начат новый сезон.")
-
-@bot.command()
-@commands.has_permissions(administrator=True)
-async def factoryreset(ctx):
-    await database.factory_reset(db_pool, ctx.guild.id)
-    await ctx.send("🇬🇧 **Factory Reset Complete.** All server configurations, roles, channels, and statistics have been permanently wiped. Run `/add-mod-role` to setup the bot again.\n🇷🇺 **Полный сброс завершен.** Все настройки сервера, роли, каналы и статистика безвозвратно удалены. Запустите `/add-mod-role` для новой настройки.")
-
-@bot.command()
-async def info(ctx):
-    info_text = (
-        "🤖 **Moderator Shift Bot v2.0 (Seasonal)**\n"
-        "🇬🇧 Tracks shifts and completely resets all data every 28 days.\n"
-        "🇷🇺 Отслеживает смены и полностью сбрасывает данные каждые 28 дней.\n\n"
-        "**Commands / Команды:**\n"
-        "`!shift` - Start / Начать\n"
-        "`!endshift` - End / Закончить\n"
-        "`!stats` - Season stats / Статистика сезона\n"
-        "`!weekly [@user]` - 7-day stats / Статистика за 7 дней\n\n"
-        "**Admins / Администраторам:**\n"
-        "`/add-mod-role` - Setup config / Настройка конфигурации\n"
-        "`!allstats` - Season Leaderboard / Таблица лидеров\n"
-        "`!allshifts` - Current shifts / Текущие смены\n"
-        "`!resetstats @user` - Wipe user / Сброс пользователя\n"
-        "`!resetallstats` - Wipe stats / Сброс статистики\n"
-        "`!factoryreset` - Deep clean & wipe bot / Полный сброс бота"
-    )
-    await ctx.send(info_text)
-
+# --- CONFIRMATION VIEW (Auto-Deletes) ---
 class ConfirmView(discord.ui.View):
     def __init__(self, user_id):
         super().__init__(timeout=60.0)
@@ -182,8 +130,34 @@ class ConfirmView(discord.ui.View):
             time_str = f" | {duration} min/мин"
             
         await database.update_last_ping(db_pool, self.user_id)
+        
+        # Instantly delete the ping message from the channel
+        await interaction.message.delete()
+        
+        # Send a private confirmation that they clicked it
         await interaction.response.send_message(f"🇬🇧 Confirmed!{time_str} / 🇷🇺 Подтверждено!{time_str}", ephemeral=True)
         self.stop()
+
+
+# --- EVENTS & BACKGROUND TASKS ---
+@bot.event
+async def on_ready():
+    global db_pool
+    try:
+        print("Attempting to connect to Supabase...")
+        db_pool = await database.get_db_pool()
+        await database.init_db(db_pool)
+        print("✅ Database connected successfully!")
+    except Exception as e:
+        print(f"❌ CRITICAL DATABASE ERROR: {e}")
+        
+    bot.add_view(PanelView()) # Registers the buttons so they work after restarts
+    shift_monitor.start()
+    try:
+        await bot.tree.sync()
+        print(f"Logged in as {bot.user} with all commands loaded.")
+    except Exception as e:
+        print(f"Sync error: {e}")
 
 @tasks.loop(minutes=1.0)
 async def shift_monitor():
@@ -227,6 +201,13 @@ async def shift_monitor():
                             await asyncio.sleep(60)
                             if not v.confirmed:
                                 await database.end_shift(db_pool, u_id)
+                                
+                                # Auto-delete the unanswered ping message
+                                try:
+                                    await m.delete()
+                                except discord.NotFound:
+                                    pass 
+                                
                                 fail_msg = f"<@{u_id}>\n🇬🇧 Failed to confirm. Shift ended.\n🇷🇺 Не подтвердил. Смена закрыта."
                                 fallback_chan = bot.get_channel(p_chan_id) if p_chan_id else shift_channels.get(u_id)
                                 if fallback_chan:
@@ -243,6 +224,64 @@ async def shift_monitor():
                         channel = shift_channels.get(user_id)
                         if channel:
                             await channel.send(f"<@{user_id}>\n🇬🇧 DMs closed! Shift aborted.\n🇷🇺 ЛС закрыты! Смена отменена.")
+
+# --- ADMIN COMMANDS ---
+@bot.tree.command(name="add-mod-role", description="Set the mod role and optional ping channel. / Установить роль и канал.")
+@discord.app_commands.default_permissions(administrator=True)
+async def add_mod_role(interaction: discord.Interaction, role: discord.Role, ping_channel: discord.TextChannel = None):
+    channel_id = ping_channel.id if ping_channel else None
+    await database.set_guild_config(db_pool, interaction.guild.id, role.id, channel_id)
+    
+    if channel_id:
+        msg = f"🇬🇧 Mod role set to {role.name}. Pings will go to {ping_channel.mention}. The 28-day season starts NOW.\n🇷🇺 Роль: {role.name}. Уведомления в {ping_channel.mention}. 28-дневный сезон начался."
+    else:
+        msg = f"🇬🇧 Mod role set to {role.name}. Pings will be sent via DM. The 28-day season starts NOW.\n🇷🇺 Роль: {role.name}. Уведомления в ЛС. 28-дневный сезон начался."
+        
+    await interaction.response.send_message(msg, ephemeral=True)
+
+@bot.command()
+@commands.has_permissions(administrator=True)
+async def sendpanel(ctx):
+    embed = discord.Embed(
+        title="🛡️ Moderator Shift Panel",
+        description="🇬🇧 Click the buttons below to manage your shift and view statistics.\n🇷🇺 Нажмите кнопки ниже для управления сменой и просмотра статистики.",
+        color=0x2b2d31 # Invisible dark Discord background color
+    )
+    await ctx.send(embed=embed, view=PanelView())
+    await ctx.message.delete()
+
+@bot.command()
+@commands.has_permissions(administrator=True)
+async def resetstats(ctx, member: discord.Member):
+    await database.reset_user_stats(db_pool, member.id, ctx.guild.id)
+    await ctx.send(f"🇬🇧 Stats for {member.mention} have been reset.\n🇷🇺 Статистика {member.mention} была сброшена.")
+
+@bot.command()
+@commands.has_permissions(administrator=True)
+async def resetallstats(ctx):
+    await database.reset_all_stats(db_pool, ctx.guild.id)
+    await ctx.send("🇬🇧 All server stats have been completely wiped. A new season starts now.\n🇷🇺 Вся статистика сервера удалена. Начат новый сезон.")
+
+@bot.command()
+@commands.has_permissions(administrator=True)
+async def factoryreset(ctx):
+    await database.factory_reset(db_pool, ctx.guild.id)
+    await ctx.send("🇬🇧 **Factory Reset Complete.** All server configurations, roles, channels, and statistics have been permanently wiped. Run `/add-mod-role` to setup the bot again.\n🇷🇺 **Полный сброс завершен.** Все настройки сервера, роли, каналы и статистика безвозвратно удалены. Запустите `/add-mod-role` для новой настройки.")
+
+@bot.command()
+async def info(ctx):
+    info_text = (
+        "🤖 **Moderator Shift Bot v2.0 (Panel Edition)**\n"
+        "🇬🇧 Tracks shifts and completely resets all data every 28 days.\n"
+        "🇷🇺 Отслеживает смены и полностью сбрасывает данные каждые 28 дней.\n\n"
+        "**Admins / Администраторам:**\n"
+        "`!sendpanel` - Drop the interactive shift panel / Создать панель\n"
+        "`/add-mod-role` - Setup config / Настройка конфигурации\n"
+        "`!resetstats @user` - Wipe user / Сброс пользователя\n"
+        "`!resetallstats` - Wipe stats / Сброс статистики\n"
+        "`!factoryreset` - Deep clean bot / Полный сброс бота"
+    )
+    await ctx.send(info_text)
 
 if __name__ == "__main__":
     keep_alive.keep_alive() 
