@@ -91,11 +91,19 @@ async def end_shift(pool, user_id):
     async with pool.acquire() as conn:
         shift = await conn.fetchrow('SELECT * FROM active_shifts WHERE user_id = $1', user_id)
         if shift:
-            duration = int((datetime.now(timezone.utc) - shift['start_time']).total_seconds() / 60)
+            # STRICT TIME TRACKING RULE: 
+            # Duration is calculated by subtracting the start time from the LAST CONFIRMED PING, 
+            # rather than the current time. Unconfirmed time is completely ignored.
+            duration = int((shift['last_ping'] - shift['start_time']).total_seconds() / 60)
+            
+            # Failsafe to ensure duration never somehow drops below 0
+            duration = max(0, duration)
+            
             await conn.execute('''
                 INSERT INTO past_shifts (user_id, guild_id, start_time, end_time, duration_minutes)
                 VALUES ($1, $2, $3, $4, $5)
             ''', user_id, shift['guild_id'], shift['start_time'], datetime.now(timezone.utc), duration)
+            
             await conn.execute('DELETE FROM active_shifts WHERE user_id = $1', user_id)
             return duration
         return None
