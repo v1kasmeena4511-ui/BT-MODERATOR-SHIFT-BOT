@@ -139,11 +139,11 @@ async def info(ctx):
         "`!stats` - Season stats / Статистика сезона\n"
         "`!weekly [@user]` - 7-day stats / Статистика за 7 дней\n\n"
         "**Admins / Администраторам:**\n"
-        "`/add-mod-role` - Setup roles & ping channel\n"
-        "`!allstats` - Season Leaderboard\n"
-        "`!allshifts` - Current shifts\n"
-        "`!resetstats @user` - Wipe user\n"
-        "`!resetallstats` - Wipe server & restart season"
+        "`/add-mod-role` - Setup roles & ping channel / Настройка ролей и канала\n"
+        "`!allstats` - Season Leaderboard / Таблица лидеров сезона\n"
+        "`!allshifts` - Current shifts / Текущие активные смены\n"
+        "`!resetstats @user` - Wipe user / Сброс статистики пользователя\n"
+        "`!resetallstats` - Wipe server & restart season / Сброс сервера и рестарт сезона"
     )
     await ctx.send(info_text)
 
