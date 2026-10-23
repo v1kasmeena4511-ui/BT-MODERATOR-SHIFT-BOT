@@ -1,10 +1,17 @@
 import asyncpg
 import os
+import ssl
 from datetime import datetime, timezone
 
 async def get_db_pool():
     db_url = os.getenv("DATABASE_URL")
-    return await asyncpg.create_pool(db_url)
+    
+    # Bypass strict SSL checks for external databases like Supabase
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    
+    return await asyncpg.create_pool(db_url, ssl=ctx)
 
 async def init_db(pool):
     async with pool.acquire() as conn:
