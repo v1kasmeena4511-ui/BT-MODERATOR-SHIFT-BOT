@@ -11,11 +11,14 @@ async def get_db_pool():
     ctx.check_hostname = False
     ctx.verify_mode = ssl.CERT_NONE
     
-    # statement_cache_size=0 is strictly required for Supabase connection pooler (port 6543/5432)
+    # statement_cache_size=0 is strictly required for Supabase connection pooler
+    # min_size and max_size prevent the bot from exceeding Supabase's 15-connection limit
     return await asyncpg.create_pool(
         db_url, 
         ssl=ctx,
-        statement_cache_size=0
+        statement_cache_size=0,
+        min_size=1,
+        max_size=5
     )
 
 async def init_db(pool):
