@@ -134,6 +134,12 @@ async def resetallstats(ctx):
     await ctx.send("🇬🇧 All server stats have been completely wiped. A new season starts now.\n🇷🇺 Вся статистика сервера удалена. Начат новый сезон.")
 
 @bot.command()
+@commands.has_permissions(administrator=True)
+async def factoryreset(ctx):
+    await database.factory_reset(db_pool, ctx.guild.id)
+    await ctx.send("🇬🇧 **Factory Reset Complete.** All server configurations, roles, channels, and statistics have been permanently wiped. Run `/add-mod-role` to setup the bot again.\n🇷🇺 **Полный сброс завершен.** Все настройки сервера, роли, каналы и статистика безвозвратно удалены. Запустите `/add-mod-role` для новой настройки.")
+
+@bot.command()
 async def info(ctx):
     info_text = (
         "🤖 **Moderator Shift Bot v2.0 (Seasonal)**\n"
@@ -145,11 +151,12 @@ async def info(ctx):
         "`!stats` - Season stats / Статистика сезона\n"
         "`!weekly [@user]` - 7-day stats / Статистика за 7 дней\n\n"
         "**Admins / Администраторам:**\n"
-        "`/add-mod-role` - Setup roles & ping channel / Настройка ролей и канала\n"
-        "`!allstats` - Season Leaderboard / Таблица лидеров сезона\n"
-        "`!allshifts` - Current shifts / Текущие активные смены\n"
-        "`!resetstats @user` - Wipe user / Сброс статистики пользователя\n"
-        "`!resetallstats` - Wipe server & restart season / Сброс сервера и рестарт сезона"
+        "`/add-mod-role` - Setup config / Настройка конфигурации\n"
+        "`!allstats` - Season Leaderboard / Таблица лидеров\n"
+        "`!allshifts` - Current shifts / Текущие смены\n"
+        "`!resetstats @user` - Wipe user / Сброс пользователя\n"
+        "`!resetallstats` - Wipe stats / Сброс статистики\n"
+        "`!factoryreset` - Deep clean & wipe bot / Полный сброс бота"
     )
     await ctx.send(info_text)
 
