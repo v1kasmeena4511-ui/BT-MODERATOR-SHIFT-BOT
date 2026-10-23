@@ -19,7 +19,7 @@ shift_channels = {}
 # --- PANEL VIEW ---
 class PanelView(discord.ui.View):
     def __init__(self):
-        super().__init__(timeout=None) # Timeout=None makes the buttons permanent after bot restarts
+        super().__init__(timeout=None)
 
     async def check_mod(self, interaction: discord.Interaction):
         config = await database.get_guild_config(db_pool, interaction.guild.id)
@@ -42,7 +42,6 @@ class PanelView(discord.ui.View):
         await database.start_shift(db_pool, interaction.user.id, interaction.guild.id)
         shift_channels[interaction.user.id] = interaction.channel 
         
-        # Ephemeral confirmation, public announcement
         await interaction.response.send_message("🇬🇧 Shift started successfully. / 🇷🇺 Смена успешно начата.", ephemeral=True)
         await interaction.channel.send(f"{interaction.user.mention}\n🇬🇧 Shift started.\n🇷🇺 Смена началась.")
 
@@ -71,7 +70,7 @@ class PanelView(discord.ui.View):
         total = await database.get_weekly_stats(db_pool, interaction.user.id)
         await interaction.response.send_message(f"🇬🇧 Weekly stats: **{total}** minutes.\n🇷🇺 За неделю: **{total}** минут.", ephemeral=True)
 
-    @discord.ui.button(label="Active Shifts (Admin)", style=discord.ButtonStyle.gray, custom_id="panel_active")
+    @discord.ui.button(label="Active Shifts / Активные смены", style=discord.ButtonStyle.gray, custom_id="panel_active")
     async def btn_active(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not interaction.user.guild_permissions.administrator:
             await interaction.response.send_message("🇬🇧 Admins only! / 🇷🇺 Только для админов!", ephemeral=True)
@@ -88,7 +87,7 @@ class PanelView(discord.ui.View):
             active_list += f"<@{s['user_id']}> — {duration} min/мин\n"
         await interaction.response.send_message(active_list, ephemeral=True)
 
-    @discord.ui.button(label="Leaderboard (Admin)", style=discord.ButtonStyle.gray, custom_id="panel_leaderboard")
+    @discord.ui.button(label="Leaderboard / Таблица лидеров", style=discord.ButtonStyle.gray, custom_id="panel_leaderboard")
     async def btn_leaderboard(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not interaction.user.guild_permissions.administrator:
             await interaction.response.send_message("🇬🇧 Admins only! / 🇷🇺 Только для админов!", ephemeral=True)
@@ -106,8 +105,7 @@ class PanelView(discord.ui.View):
             leaderboard += f"**{idx+1}.** {name} — {row['total']} min/мин\n"
         await interaction.response.send_message(leaderboard, ephemeral=True)
 
-
-# --- CONFIRMATION VIEW (Auto-Deletes) ---
+# --- CONFIRMATION VIEW ---
 class ConfirmView(discord.ui.View):
     def __init__(self, user_id):
         super().__init__(timeout=60.0)
@@ -131,15 +129,11 @@ class ConfirmView(discord.ui.View):
             
         await database.update_last_ping(db_pool, self.user_id)
         
-        # Instantly delete the ping message from the channel
         await interaction.message.delete()
-        
-        # Send a private confirmation that they clicked it
         await interaction.response.send_message(f"🇬🇧 Confirmed!{time_str} / 🇷🇺 Подтверждено!{time_str}", ephemeral=True)
         self.stop()
 
-
-# --- EVENTS & BACKGROUND TASKS ---
+# --- EVENTS & TASKS ---
 @bot.event
 async def on_ready():
     global db_pool
@@ -151,7 +145,7 @@ async def on_ready():
     except Exception as e:
         print(f"❌ CRITICAL DATABASE ERROR: {e}")
         
-    bot.add_view(PanelView()) # Registers the buttons so they work after restarts
+    bot.add_view(PanelView())
     shift_monitor.start()
     try:
         await bot.tree.sync()
@@ -163,7 +157,6 @@ async def on_ready():
 async def shift_monitor():
     if not db_pool: return
     
-    # 1. Check for 28-day global reset
     reset_guilds = await database.check_auto_reset(db_pool)
     for guild_id in reset_guilds:
         config = await database.get_guild_config(db_pool, guild_id)
@@ -172,7 +165,6 @@ async def shift_monitor():
             if channel:
                 await channel.send("🔄 **A new 28-day season has started!** All stats have been wiped.\n🔄 **Начался новый 28-дневный сезон!** Вся статистика удалена.")
     
-    # 2. Monitor active shifts
     active_shifts = await database.get_all_active_shifts(db_pool)
     now = datetime.now(timezone.utc)
     
@@ -191,7 +183,7 @@ async def shift_monitor():
                 view = ConfirmView(user_id)
                 msg_content = f"<@{user_id}>\n🇬🇧 You have 1 minute to confirm activity.\n🇷🇺 У вас есть 1 минута на подтверждение."
                 
-                target_dest = bot.get_channel(ping_channel_id) if ping_channel_id else bot.get_user(user_id)
+                target_dest = bot.get_channel(ping_channel_id) if ping_channel_id else shift_channels.get(user_id) or bot.get_user(user_id)
                 
                 if target_dest:
                     try:
@@ -201,8 +193,6 @@ async def shift_monitor():
                             await asyncio.sleep(60)
                             if not v.confirmed:
                                 await database.end_shift(db_pool, u_id)
-                                
-                                # Auto-delete the unanswered ping message
                                 try:
                                     await m.delete()
                                 except discord.NotFound:
@@ -226,26 +216,33 @@ async def shift_monitor():
                             await channel.send(f"<@{user_id}>\n🇬🇧 DMs closed! Shift aborted.\n🇷🇺 ЛС закрыты! Смена отменена.")
 
 # --- ADMIN COMMANDS ---
-@bot.tree.command(name="add-mod-role", description="Set the mod role and optional ping channel. / Установить роль и канал.")
+@bot.tree.command(name="add-mod-role", description="Set the mod role. / Установить роль.")
 @discord.app_commands.default_permissions(administrator=True)
-async def add_mod_role(interaction: discord.Interaction, role: discord.Role, ping_channel: discord.TextChannel = None):
-    channel_id = ping_channel.id if ping_channel else None
-    await database.set_guild_config(db_pool, interaction.guild.id, role.id, channel_id)
+async def add_mod_role(interaction: discord.Interaction, role: discord.Role):
+    config = await database.get_guild_config(db_pool, interaction.guild.id)
+    existing_ping_channel = config['ping_channel_id'] if config else None
     
-    if channel_id:
-        msg = f"🇬🇧 Mod role set to {role.name}. Pings will go to {ping_channel.mention}. The 28-day season starts NOW.\n🇷🇺 Роль: {role.name}. Уведомления в {ping_channel.mention}. 28-дневный сезон начался."
-    else:
-        msg = f"🇬🇧 Mod role set to {role.name}. Pings will be sent via DM. The 28-day season starts NOW.\n🇷🇺 Роль: {role.name}. Уведомления в ЛС. 28-дневный сезон начался."
-        
+    await database.set_guild_config(db_pool, interaction.guild.id, role.id, existing_ping_channel)
+    
+    msg = f"🇬🇧 Mod role set to {role.name}. Run `!sendpanel` in your shift channel to complete setup.\n🇷🇺 Роль: {role.name}. Запустите `!sendpanel` в канале смен для завершения настройки."
     await interaction.response.send_message(msg, ephemeral=True)
 
 @bot.command()
 @commands.has_permissions(administrator=True)
 async def sendpanel(ctx):
+    config = await database.get_guild_config(db_pool, ctx.guild.id)
+    if not config or not config['role_id']:
+        await ctx.send("❌ Please run `/add-mod-role` first to set the moderator role before sending the panel.", delete_after=10)
+        await ctx.message.delete()
+        return
+
+    # Automatically set the ping channel to wherever the panel is dropped
+    await database.set_guild_config(db_pool, ctx.guild.id, config['role_id'], ctx.channel.id)
+
     embed = discord.Embed(
         title="🛡️ Moderator Shift Panel",
         description="🇬🇧 Click the buttons below to manage your shift and view statistics.\n🇷🇺 Нажмите кнопки ниже для управления сменой и просмотра статистики.",
-        color=0x2b2d31 # Invisible dark Discord background color
+        color=0x2b2d31
     )
     await ctx.send(embed=embed, view=PanelView())
     await ctx.message.delete()
@@ -275,8 +272,8 @@ async def info(ctx):
         "🇬🇧 Tracks shifts and completely resets all data every 28 days.\n"
         "🇷🇺 Отслеживает смены и полностью сбрасывает данные каждые 28 дней.\n\n"
         "**Admins / Администраторам:**\n"
-        "`!sendpanel` - Drop the interactive shift panel / Создать панель\n"
-        "`/add-mod-role` - Setup config / Настройка конфигурации\n"
+        "`/add-mod-role` - Setup role / Настройка роли\n"
+        "`!sendpanel` - Drop shift panel & set ping channel / Создать панель\n"
         "`!resetstats @user` - Wipe user / Сброс пользователя\n"
         "`!resetallstats` - Wipe stats / Сброс статистики\n"
         "`!factoryreset` - Deep clean bot / Полный сброс бота"
