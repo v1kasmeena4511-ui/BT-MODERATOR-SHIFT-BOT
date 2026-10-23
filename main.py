@@ -42,8 +42,8 @@ class PanelView(discord.ui.View):
         await database.start_shift(db_pool, interaction.user.id, interaction.guild.id)
         shift_channels[interaction.user.id] = interaction.channel 
         
+        # Only the private, dismissible message is sent here
         await interaction.response.send_message("🇬🇧 Shift started successfully. / 🇷🇺 Смена успешно начата.", ephemeral=True)
-        await interaction.channel.send(f"{interaction.user.mention}\n🇬🇧 Shift started.\n🇷🇺 Смена началась.")
 
     @discord.ui.button(label="End Shift / Закончить", style=discord.ButtonStyle.red, custom_id="panel_end")
     async def btn_end(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -236,7 +236,6 @@ async def sendpanel(ctx):
         await ctx.message.delete()
         return
 
-    # Automatically set the ping channel to wherever the panel is dropped
     await database.set_guild_config(db_pool, ctx.guild.id, config['role_id'], ctx.channel.id)
 
     embed = discord.Embed(
