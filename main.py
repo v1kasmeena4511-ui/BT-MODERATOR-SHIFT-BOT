@@ -42,7 +42,6 @@ class PanelView(discord.ui.View):
         await database.start_shift(db_pool, interaction.user.id, interaction.guild.id)
         shift_channels[interaction.user.id] = interaction.channel 
         
-        # Only the private, dismissible message is sent here
         await interaction.response.send_message("🇬🇧 Shift started successfully. / 🇷🇺 Смена успешно начата.", ephemeral=True)
 
     @discord.ui.button(label="End Shift / Закончить", style=discord.ButtonStyle.red, custom_id="panel_end")
@@ -201,7 +200,8 @@ async def shift_monitor():
                                 fail_msg = f"<@{u_id}>\n🇬🇧 Failed to confirm. Shift ended.\n🇷🇺 Не подтвердил. Смена закрыта."
                                 fallback_chan = bot.get_channel(p_chan_id) if p_chan_id else shift_channels.get(u_id)
                                 if fallback_chan:
-                                    await fallback_chan.send(fail_msg)
+                                    # This message will now auto-delete after 15 seconds
+                                    await fallback_chan.send(fail_msg, delete_after=15)
                             if u_id in pending_confirmations:
                                 del pending_confirmations[u_id]
 
@@ -213,7 +213,7 @@ async def shift_monitor():
                         await database.end_shift(db_pool, user_id)
                         channel = shift_channels.get(user_id)
                         if channel:
-                            await channel.send(f"<@{user_id}>\n🇬🇧 DMs closed! Shift aborted.\n🇷🇺 ЛС закрыты! Смена отменена.")
+                            await channel.send(f"<@{user_id}>\n🇬🇧 DMs closed! Shift aborted.\n🇷🇺 ЛС закрыты! Смена отменена.", delete_after=15)
 
 # --- ADMIN COMMANDS ---
 @bot.tree.command(name="add-mod-role", description="Set the mod role. / Установить роль.")
