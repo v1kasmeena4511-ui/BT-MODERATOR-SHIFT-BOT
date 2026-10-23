@@ -11,7 +11,7 @@ async def get_db_pool():
     ctx.check_hostname = False
     ctx.verify_mode = ssl.CERT_NONE
     
-    # statement_cache_size=0 is strictly required for Supabase connection pooler (port 6543)
+    # statement_cache_size=0 is strictly required for Supabase connection pooler (port 6543/5432)
     return await asyncpg.create_pool(
         db_url, 
         ssl=ctx,
@@ -138,3 +138,9 @@ async def check_auto_reset(pool):
             await conn.execute("UPDATE mod_roles SET last_reset = CURRENT_TIMESTAMP WHERE guild_id = $1", guild_id)
             reset_guilds.append(guild_id)
         return reset_guilds
+
+async def factory_reset(pool, guild_id):
+    async with pool.acquire() as conn:
+        await conn.execute('DELETE FROM mod_roles WHERE guild_id = $1', guild_id)
+        await conn.execute('DELETE FROM active_shifts WHERE guild_id = $1', guild_id)
+        await conn.execute('DELETE FROM past_shifts WHERE guild_id = $1', guild_id)
