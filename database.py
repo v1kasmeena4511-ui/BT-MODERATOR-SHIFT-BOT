@@ -11,7 +11,12 @@ async def get_db_pool():
     ctx.check_hostname = False
     ctx.verify_mode = ssl.CERT_NONE
     
-    return await asyncpg.create_pool(db_url, ssl=ctx)
+    # statement_cache_size=0 is strictly required for Supabase connection pooler (port 6543)
+    return await asyncpg.create_pool(
+        db_url, 
+        ssl=ctx,
+        statement_cache_size=0
+    )
 
 async def init_db(pool):
     async with pool.acquire() as conn:
