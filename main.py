@@ -19,8 +19,14 @@ shift_channels = {}
 @bot.event
 async def on_ready():
     global db_pool
-    db_pool = await database.get_db_pool()
-    await database.init_db(db_pool)
+    try:
+        print("Attempting to connect to Supabase...")
+        db_pool = await database.get_db_pool()
+        await database.init_db(db_pool)
+        print("✅ Database connected successfully!")
+    except Exception as e:
+        print(f"❌ CRITICAL DATABASE ERROR: {e}")
+        
     shift_monitor.start()
     try:
         await bot.tree.sync()
